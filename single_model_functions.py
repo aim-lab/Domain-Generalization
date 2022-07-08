@@ -163,9 +163,9 @@ def train_batches(model, p, calc_metric, *args) -> float:
         labels2 = labels2.to(p.device)
         # forward
         outputs1 = model(inputs1)  # forward pass
-        outputs2 = model(inputs2)
+        outputs2, aug_loss = model(inputs2, flag_aug=True)
         # backward + optimize
-        loss = cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
+        loss = aug_loss + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
         optimizer.zero_grad()
         loss.backward(retain_graph=True)  # backpropagation
         optimizer.step()
@@ -218,9 +218,10 @@ def eval_batches(model, p, calc_metric, *args) -> float:
             labels2 = labels2.to(p.device)
             # forward
             outputs1 = model(inputs1)  # forward pass
-            outputs2 = model(inputs2)
+            outputs2, aug_loss = model(inputs2, flag_aug=True)
+            # aug_loss = torch.tensor(aug_loss).unsqueeze(0)
             # calculate loss
-            loss = cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
+            loss = aug_loss + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
             running_loss += loss.data.item()
             if calc_metric:
                 raise NotImplementedError

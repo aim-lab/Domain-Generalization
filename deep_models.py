@@ -2,9 +2,6 @@ import os
 import numpy as np
 import torch
 import torch.nn as nn
-from tensorflow.keras.models import Model
-import tensorflow as tf
-from tensorflow.keras import layers, losses
 from data_loader import TorchDataset
 import time
 from sklearn.metrics import classification_report
@@ -686,26 +683,26 @@ class DeepModels():
         return model_accuracy, confusion_matrix
 
 
-class AE(Model):
- #todo: change this to pytorch
-    def __init__(self, nbeats=250):
-        super(AE, self).__init__()
-        self.encoder = tf.keras.Sequential([
-            layers.Dense(32, activation="relu"),
-            layers.Dense(16, activation="relu"),
-            layers.Dense(8, activation="relu")])
-
-        self.decoder = tf.keras.Sequential([
-            layers.Dense(16, activation="relu"),
-            layers.Dense(32, activation="relu"),
-            layers.Dense(nbeats, activation="sigmoid")])
-
-    def call(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
-
-# autoencoder = AE()
+# class AE(Model):
+#  #todo: change this to pytorch
+#     def __init__(self, nbeats=250):
+#         super(AE, self).__init__()
+#         self.encoder = tf.keras.Sequential([
+#             layers.Dense(32, activation="relu"),
+#             layers.Dense(16, activation="relu"),
+#             layers.Dense(8, activation="relu")])
+#
+#         self.decoder = tf.keras.Sequential([
+#             layers.Dense(16, activation="relu"),
+#             layers.Dense(32, activation="relu"),
+#             layers.Dense(nbeats, activation="sigmoid")])
+#
+#     def call(self, x):
+#         encoded = self.encoder(x)
+#         decoded = self.decoder(encoded)
+#         return decoded
+#
+# # autoencoder = AE()
 
 
 class CNN(nn.Module):
@@ -830,6 +827,7 @@ class AdverserailCNN(nn.Module):
 
         return out
 
+
 class Advrtset(nn.Module):
 
     def __init__(self, nbeats, num_chann=[20, 10, 30], ker_size=10, stride=2,
@@ -894,19 +892,89 @@ class Advrtset(nn.Module):
                 # nn.Dropout(idx + idx_lin + 1)
             ))
 
-    def forward(self, x):
-        out = self.conv[0](x)
-        for i in range(1, len(self.conv) - len(self.num_hidden)):  # todo: check if range is true
-            out = self.conv[i](out)
+    def forward(self, x, flag_aug=False):
+        if not(flag_aug):
+            out = self.conv[0](x)
+            for i in range(1, len(self.conv) - len(self.num_hidden)):  # todo: check if range is true
+                out = self.conv[i](out)
 
-        # collapse
-        out = out.view(out.size(0), -1)
-        for i in range(len(self.conv) - len(self.num_hidden), len(self.conv)):  # todo: check if range is true
-        # linear layer
-            out = self.conv[i](out)  # NOTICE THAT HERE IT IS NOT CONVOLUTION BUT MLP
-        # out = self.soft_max(out)
+            # collapse
+            out = out.view(out.size(0), -1)
+            for i in range(len(self.conv) - len(self.num_hidden), len(self.conv)):  # todo: check if range is true
+            # linear layer
+                out = self.conv[i](out)  # NOTICE THAT HERE IT IS NOT CONVOLUTION BUT MLP
+            # out = self.soft_max(out)
 
-        return out
+            return out
+        else:
+            out = self.conv[0](x)
+            out = self.conv[1](out)
+            aug = self.create_aug(out)
+            # aug = torch.reshape(aug, (out.shape[0]*aug.shape[1], out.shape[1], out.shape[2])).type(torch.FloatTensor)
+            ##### NOTICE STATRTING FROM 2 #######
+            for i in range(2, len(self.conv) - len(self.num_hidden)):  # todo: check if range is true
+                out = self.conv[i](out)
+                aug = self.conv[i](aug)
+            aug_loss = self.L_aug(out, aug)
+
+            # collapse
+            out = out.view(out.size(0), -1)
+
+
+
+            for i in range(len(self.conv) - len(self.num_hidden), len(self.conv)):  # todo: check if range is true
+                # linear layer
+                out = self.conv[i](out)  # NOTICE THAT HERE IT IS NOT CONVOLUTION BUT MLP
+            # out = self.soft_max(out)
+
+            return out, aug_loss
+
+
+    def create_aug(self, V, alph=0.9):
+        vec_idx = torch.arange(V.shape[0])
+        A = torch.zeros_like(V)
+        for j, v in enumerate(V):  # runs over the first dimension which is the number of examples per batch
+            lmbda = (1-alph)*torch.rand(1).item() + alph  # setting uniformly distributed r.v in range [alph,1]
+            vec_neg = vec_idx[~np.isin(vec_idx, j)]
+            perm = torch.randperm(len(vec_neg))
+            v_bar = V[perm[0]]
+            A[j] = lmbda*v + (1-lmbda)*v_bar
+        return A
+
+    def L_aug(self, Z, phi_A, n=10):
+        vec_idx = torch.arange(Z.shape[0])
+        I_Z_A = 0.0
+        eps = 10.0 ** -6
+        for j, pos_pair in enumerate(zip(Z, phi_A), 0):
+            z, phi_A_pos = pos_pair
+            vec_neg = vec_idx[~np.isin(vec_idx, j)]
+            perm = torch.randperm(len(vec_neg))
+            v_bar = phi_A[perm[:n]]
+            # set v_bar as a mtrix with n rows and flattened data
+            A = torch.cat((phi_A_pos.flatten().unsqueeze(0), v_bar.view(v_bar.size(0), -1)))
+            sim = torch.matmul(A, z.flatten())
+            L = sim[0]/(eps + torch.sum(sim))
+            I_Z_A -= L.item()  # NOTICE THE MINUS
+        mean_I_Z_A = I_Z_A/len(Z)
+        return mean_I_Z_A
+
+
+
+
+
+    # def create_aug(self, V, alph=0.9, n=10):
+    #     vec_idx = torch.arange(V.shape[0])
+    #     A = torch.zeros((V.shape[0], n + 1, V.shape[1], V.shape[2]))
+    #     for j, v in enumerate(V):  # runs over the first dimension which is the number of examples per batch
+    #         lmbda = (1-alph)*torch.rand(1).item() + alph  # setting uniformly distributed r.v in range [alph,1]
+    #         vec_neg = vec_idx[~np.isin(vec_idx, j)]
+    #         perm = torch.randperm(len(vec_neg))
+    #         V_bar = V[perm[:n+1]]
+    #         A_pos = lmbda*v + (1-lmbda)*V_bar[0]
+    #         V_bar = V_bar[1:]
+    #         A_neg = (1-lmbda)*v.repeat(len(V_bar), 1, 1) + lmbda*V_bar
+    #         A[j] = torch.cat((A_pos.unsqueeze(0), A_neg), 0)
+    #     return A
 
 
 class TruncCNNtest(nn.Module):

@@ -31,7 +31,7 @@ if __name__ == '__main__':
 
     ##### NOTICE  WHEN TO USE SCALER FOR TESTING. IF WE USE FULL DATASET FOR LEARNING THUS OUTSIDE SCALER IS NOT NEEDED.
 
-    model = Advrtset(tr_dataset_1.x.shape[1], ker_size=p.ker_size, stride=p.stride, dial=p.dial).to(p.device)
+    model = Advrtset(tr_dataset_1.x.shape[1], p, ker_size=p.ker_size, stride=p.stride, dial=p.dial).to(p.device)
     if p.mult_gpu:
         model = nn.DataParallel(model, device_ids=p.device_ids)
 

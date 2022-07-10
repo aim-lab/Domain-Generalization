@@ -15,6 +15,7 @@ import pickle
 from comp2ecg_single_model import HRVDataset
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler as MinMax
+from sklearn import metrics
 
 
 def load_datasets(full_pickle_path: str, med_mode: str = 'c', mode: int = 0, feat2drop: list = [], sig_type: str = 'rr',
@@ -136,7 +137,7 @@ def scale_dataset(*args, input_scaler=None, mode=0, should_scale: bool = False) 
             return args
 
 
-def train_model(model: object, p: object, *args, calc_metric: bool = False):
+def train_model(model: object, p: object, *args):
     """
     Training the model.
     :param model: chosen neural network.
@@ -147,10 +148,10 @@ def train_model(model: object, p: object, *args, calc_metric: bool = False):
     :return: void (model is learned).
     """
     model.train()
-    train_epochs(model, p, calc_metric, *args)  # without "*" it would have built a tuple in a tuple
+    train_epochs(model, p, *args)  # without "*" it would have built a tuple in a tuple
 
 
-def train_epochs(model: object, p: object, calc_metric: bool, *args):
+def train_epochs(model: object, p: object, *args):
     """
     This function runs the model in epochs and evaluates the validation sets if exist (see more details in scale_dataset).
     :param: inputs from train_model function.
@@ -158,9 +159,9 @@ def train_epochs(model: object, p: object, calc_metric: bool, *args):
     """
     for epoch in range(1, p.num_epochs + 1):
         epoch_time = time.time()
-        training_loss = train_batches(model, p, epoch, *args, calc_metric=False)
+        training_loss = train_batches(model, p, epoch, *args)
         training_loss /= len(args[1])  # len of trainloader
-        validation_loss = eval_model(model, p, epoch, *args, calc_metric=False)
+        validation_loss = eval_model(model, p, epoch, *args)
         if len(args) > 3:  # meaning validation exists.
             validation_loss /= len(args[3])  # len of valloader
         log = "Epoch: {} | Training loss: {:.4f}  | Validation loss: {:.4f}   ".format(epoch, training_loss, validation_loss)
@@ -169,7 +170,7 @@ def train_epochs(model: object, p: object, calc_metric: bool, *args):
         print(log)
 
 
-def train_batches(model, p, epoch, *args, calc_metric=False) -> float:
+def train_batches(model, p, epoch, *args) -> float:
     """
     This function runs over the mini-batches in a single complete epoch using cosine loss.
     :param: inputs from train_model function.
@@ -181,6 +182,8 @@ def train_batches(model, p, epoch, *args, calc_metric=False) -> float:
     else:
         optimizer, dataloader1, dataloader2, _, _ = args
     running_loss = 0.0
+    scores_list = []
+    y_list = []
     for i, data in enumerate(tqdm(zip(dataloader1, dataloader2), total=len(dataloader1)), 0):
         # get the inputs
         inputs1, labels1 = data[0]
@@ -206,13 +209,30 @@ def train_batches(model, p, epoch, *args, calc_metric=False) -> float:
         optimizer.step()
         # accumulate mean loss
         running_loss += loss.data.item()
-        if calc_metric:
-            #todo: use built-in sklean metrics report
-            raise NotImplementedError
+        res_temp, y_temp = cosine_loss(outputs1, outputs2, labels1, labels2, flag=1, lmbda=p.lmbda, b=p.b)
+        scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
+        y_list.append(y_temp)
+    if p.calc_metric:
+        calc_metric(scores_list, y_list, epoch)
     return running_loss
 
 
-def eval_model(model, p, epoch, *args, calc_metric=0):
+def calc_metric(scores_list, y_list, epoch):
+    scores = torch.cat(scores_list)
+    y = torch.cat(y_list)
+    fpr, tpr, thresholds = metrics.roc_curve(y.detach().cpu(), scores.detach().cpu())
+    # https://stats.stackexchange.com/questions/272962/are-far-and-frr-the-same-as-fpr-and-fnr-respectively
+    far, frr, = fpr, 1 - tpr  # since frr = fnr
+    thresholds -= 1
+    err_idx = np.argmin(np.abs(frr - far))
+    err = 0.5 * (frr[err_idx] + far[err_idx])
+    if np.mod(epoch, 10) == 0:
+        plt.plot(np.flip(thresholds), far, np.flip(thresholds), frr)
+        plt.legend(['FAR', 'FRR'])
+        plt.title('ERR = {:.2f}'.format(err))
+        plt.show()
+
+def eval_model(model, p, epoch, *args):
     """
     This function evaluates the current learned model on validation set in every epoch or on testing set in a "single
     epoch".
@@ -226,11 +246,11 @@ def eval_model(model, p, epoch, *args, calc_metric=0):
         return eval_loss
     else:
         model.eval()
-        eval_loss = eval_batches(model, p, epoch, *args, calc_metric=calc_metric)  # without "*" it would have built a tuple in a tuple
+        eval_loss = eval_batches(model, p, epoch, *args)  # without "*" it would have built a tuple in a tuple
         return eval_loss
 
 
-def eval_batches(model, p,  epoch, *args, calc_metric=False) -> float:
+def eval_batches(model, p,  epoch, *args) -> float:
     """
     This function runs evaluation over batches.
     :param: see eval_model
@@ -241,6 +261,8 @@ def eval_batches(model, p,  epoch, *args, calc_metric=False) -> float:
     else:  # (=2) only testing
         dataloader1, dataloader2 = args
     running_loss = 0.0
+    scores_list = []
+    y_list = []
     with torch.no_grad():
         for i, data in enumerate(tqdm(zip(dataloader1, dataloader2), total=len(dataloader1)), 0):
             # get the inputs
@@ -264,8 +286,12 @@ def eval_batches(model, p,  epoch, *args, calc_metric=False) -> float:
                 loss = cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
             # forward
             running_loss += loss.data.item()
-            if calc_metric:
-                raise NotImplementedError
+            res_temp, y_temp = cosine_loss(outputs1, outputs2, labels1, labels2, flag=1, lmbda=p.lmbda, b=p.b)
+            scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
+            y_list.append(y_temp)
+        if p.calc_metric:
+            calc_metric(scores_list, y_list, epoch)
+
     return running_loss
 
 

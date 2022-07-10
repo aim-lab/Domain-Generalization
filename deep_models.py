@@ -831,8 +831,8 @@ class AdverserailCNN(nn.Module):
 
 class Advrtset(nn.Module):
 
-    def __init__(self, nbeats, p, num_chann=[20, 10, 30, 40, 30, 20], ker_size=10, stride=2,
-                 dial=1, pad=0, drop_out=0.15, num_hidden=[60, 40]):
+    def __init__(self, nbeats, p, num_chann=[128, 128, 64], ker_size=10, stride=2,
+                 dial=1, pad=0, drop_out=0.15, num_hidden=[32, 32]):
         super(Advrtset, self).__init__()
 
         inputs = [num_chann, ker_size, stride, dial, pad, drop_out, num_hidden]
@@ -913,8 +913,7 @@ class Advrtset(nn.Module):
             for j in range(1, self.p.e2_idx):
                 out = self.conv[j](out)
             aug = self.create_aug(out)
-            # aug = torch.reshape(aug, (out.shape[0]*aug.shape[1], out.shape[1], out.shape[2])).type(torch.FloatTensor)
-            ##### NOTICE STATRTING FROM 2 #######
+            ##### NOTICE STATRTING FROM self.p.e2_idx #######
             for i in range(self.p.e2_idx, len(self.conv) - len(self.num_hidden)):  # todo: check if range is true
                 out = self.conv[i](out)
                 aug = self.conv[i](aug)

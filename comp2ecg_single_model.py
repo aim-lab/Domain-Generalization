@@ -23,7 +23,7 @@ class HRVDataset(Dataset):
         # self.x = x.clone().detach().requires_grad_(True)
         super().__init__()
         self.x = x.copy()
-        self.y = np.array([int(val) for val in y])
+        self.y = y.copy()
         self.mode = mode
 
 
@@ -41,19 +41,20 @@ class HRVDataset(Dataset):
         """
         # np.random.seed(5)
         if self.mode:
-            y = self.y[idx]
+            y = self.y[idx, 0]
             r = np.random.randint(2)  # 50%-50%
             if r:  # find negative example
-                neg_list = np.argwhere(self.y != y)
+                neg_list = np.argwhere(self.y[:, 0] != y)
                 idx = neg_list[np.random.randint(0, len(neg_list))].item()
             else:
                 idx_temp = None
-                pos_list = np.argwhere(self.y == y)
+                pos_list = np.argwhere(self.y[:, 0] == y)
                 while (idx_temp is None) or (idx_temp == idx):  # avoid comparing the same signals
                     idx_temp = pos_list[np.random.randint(0, len(pos_list))].item()
                 idx = idx_temp
         x = self.x[idx:idx+1, :]
-        y = np.array(self.y[idx], dtype=np.float)
+        y = self.y[idx, :]
+        # y = np.array(self.y[idx], dtype=np.float)
         sample = (torch.from_numpy(x).requires_grad_(True).type(torch.FloatTensor), torch.from_numpy(y).type(torch.FloatTensor))  # just here convert to torch
         return sample
 

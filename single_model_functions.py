@@ -43,7 +43,7 @@ def load_datasets(full_pickle_path: str, med_mode: str = 'c', mode: int = 0, fea
                 y = e.y_test_specific
                 print('Ages used in training set are {}'. format(np.unique(y['age'])))
         x_c, x_a = x[:, y['med'] == 0], x[:, y['med'] == 1]
-        y_c, y_a = y['id'][y['med'] == 0].values, y['id'][y['med'] == 1].values
+        y_c, y_a = y[['id', 'age']][y['med'] == 0].values, y[['id', 'age']][y['med'] == 1].values
         if med_mode == 'c':
             dataset = HRVDataset(x_c.T, y_c, mode=mode)  # transpose should fit HRVDataset
         elif med_mode == 'a':
@@ -51,6 +51,7 @@ def load_datasets(full_pickle_path: str, med_mode: str = 'c', mode: int = 0, fea
         else:  # other medications
             raise NotImplementedError
     else:  # Koopman HRV
+        #todo: add age tags
         with open(full_pickle_path, 'rb') as f:
             e = pickle.load(f)
             data = e[0:4]
@@ -81,20 +82,20 @@ def split_dataset(dataset: object, val_size: float = 0.2, seed: int = 42, proper
     :param seed: seed for random choice of mice.
     :param proper: if True the split is done like in real testing, i.e. the training and validation sets contain data
      from different mice. If False, then only the examples are different (came form different time windows).
-    :return: 4 numpy arrays (2 matrices and 2 vectors).
+    :return: 4 numpy arrays.
     """
     if proper:  # meaning splitting train and val into different mice or just different time windows
         np.random.seed(seed)
         tags = np.unique(dataset.y)
         val_tags = np.random.choice(tags, int(np.floor(val_size*len(tags))), replace=False)
         train_tags = np.setdiff1d(tags, val_tags)
-        train_mask = np.isin(dataset.y, train_tags)
-        val_mask = np.isin(dataset.y, val_tags)
+        train_mask = np.isin(dataset.y[:, 0], train_tags)
+        val_mask = np.isin(dataset.y[:, 0], val_tags)
         x_train = dataset.x[train_mask, :]
-        y_train = dataset.y[train_mask]
+        y_train = dataset.y[train_mask, :]
         x_val = dataset.x[val_mask, :]
-        y_val = dataset.y[val_mask]
-    else:
+        y_val = dataset.y[val_mask, :]
+    else:  #todo: check if split is done correctly here
         x_train, x_val, y_train, y_val = train_test_split(dataset.x, dataset.y, test_size=val_size)
     return x_train, y_train, x_val, y_val
 
@@ -121,7 +122,7 @@ def scale_dataset(*args, input_scaler=None, mode=0, should_scale: bool = False) 
             if should_scale:
                 x_train = scaler.fit_transform(args[0])
                 x_val = scaler.transform(args[2])
-            else:
+            else:  #todo: remove mean rr from every example
                 x_train = args[0]
                 x_val = args[2]
             return HRVDataset(x_train, args[1], mode=mode), HRVDataset(x_val, args[3], mode=mode), scaler
@@ -198,7 +199,7 @@ def train_batches(model, p, epoch, *args) -> float:
     """
     This function runs over the mini-batches in a single complete epoch using cosine loss.
     :param: inputs from train_model function.
-    :param epoch: current epoch to check if pretrainng is over
+    :param epoch: current epoch to check if pretraining is over
     :return: accumalting loss over the epoch.
     """
     if len(args) == 3:  # validation does not exist
@@ -220,7 +221,7 @@ def train_batches(model, p, epoch, *args) -> float:
         # forward
         if epoch > p.pretraining_epoch:
             outputs1, aug_loss1 = model(inputs1, flag_aug=True)  # forward pass
-            outputs2, aug_loss2 = model(inputs2, flag_aug=True)
+            outputs2, aug_loss2 = model(inputs2, flag_aug=True, y=labels1[:, 1])
             # backward + optimize
             loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag,
                                                                    lmbda=p.lmbda, b=p.b)
@@ -245,6 +246,14 @@ def train_batches(model, p, epoch, *args) -> float:
 
 
 def calc_metric(scores_list, y_list, epoch, train_mode='Training'):
+    """
+    This function calculates metrics relevant to verification task such as FAR, FRR, ERR, confusion matrix etc.
+    :param scores_list: list of tensors (mini-batches) that are probability-like.
+    :param y_list: list of tensors (mini-batches) where every example can have the value of 0 (not verified) or 1 (verified).
+    :param epoch: current epoch number.
+    :param train_mode: Training/Testing for title.
+    :return: ERR + plotting every 10 epochs and priniting confusion matrix every epoch.
+    """
     scores = torch.cat(scores_list)
     y = torch.cat(y_list)
     fpr, tpr, thresholds = metrics.roc_curve(y.detach().cpu(), scores.detach().cpu())

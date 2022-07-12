@@ -17,7 +17,6 @@ from project_settings import ProSet
 
 if __name__ == '__main__':
     p = ProSet()
-
     # wandb.login()
     # wandb.init('test', entity=p.entity)
     # config = dict(n_epochs=p.num_epochs, batch_size=p.batch_size)

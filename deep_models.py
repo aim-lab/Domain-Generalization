@@ -134,8 +134,8 @@ def cosine_loss(out1, out2, lbl1, lbl2, flag=0, lmbda=1, b=0):
 
     :param out1: representation in latent space of input1
     :param out2: representation in latent space of input2
-    :param lbl1: id of input1
-    :param lbl2: id of input2
+    :param lbl1: The first column is the id of input1 and the second is the age
+    :param lbl2: The first column is the id of input2 and the second is the age
     :param flag: 0: return only the loss, 1: return cosine distance and equality label
     :param lmbda: controls FAR. The larger lmbda is, the smaller the FAR
     :param b: scalar in [-1,1]. Controls the threshold for deciding if two inputs are the same or not. By default, if out1 and out2 are
@@ -149,7 +149,7 @@ def cosine_loss(out1, out2, lbl1, lbl2, flag=0, lmbda=1, b=0):
         cos = nn.CosineSimilarity()
     res = cos(out1, out2)
     res = res.t()
-    y = 1*(lbl1 == lbl2)
+    y = 1*(lbl1[:, 0] == lbl2[:, 0])
     # batch_loss = lmbda1*(1 - y) * res + lmbda2*y*(1 - res)
     #
     # batch_loss = (1-y*(1+lmbda))*res
@@ -895,7 +895,7 @@ class Advrtset(nn.Module):
                 # nn.Dropout(idx + idx_lin + 1)
             ))
 
-    def forward(self, x, flag_aug=False):
+    def forward(self, x, flag_aug=False, y=None):
         if not(flag_aug):
             out = self.conv[0](x)
             for i in range(1, len(self.conv) - len(self.num_hidden)):  # todo: check if range is true
@@ -919,6 +919,8 @@ class Advrtset(nn.Module):
                 out = self.conv[i](out)
                 aug = self.conv[i](aug)
             aug_loss = self.L_aug(out, aug)
+            if y is not None:
+                supp_loss = self.L_supp(out, y)
 
             # collapse
             out = out.view(out.size(0), -1)
@@ -936,18 +938,36 @@ class Advrtset(nn.Module):
 
             return out, aug_loss
 
-    def create_aug(self, V, alph=0.9):
+
+    def create_aug(self, V, alpha=0.9):
+        """
+        This function creates a positive augmentation for every representation in the mini-batch according to mixup
+        algorithm.
+        :param V: a mini-batch of embeddings (after e1).
+        :param alpha: a fraction that controls the "positivity" of the augmentaiton. The closer it is to 1, the more
+        likely the embedding to resemble the representation.
+        :return: matrix of augmentations in the same size of the mini-batch.
+        """
         vec_idx = torch.arange(V.shape[0])
         A = torch.zeros_like(V)
         for j, v in enumerate(V):  # runs over the first dimension which is the number of examples per batch
-            lmbda = (1-alph)*torch.rand(1).item() + alph  # setting uniformly distributed r.v in range [alph,1]
+            lmbda = (1-alpha)*torch.rand(1).item() + alpha  # setting uniformly distributed r.v in range [alph,1]
             vec_neg = vec_idx[~np.isin(vec_idx, j)]
             perm = torch.randperm(len(vec_neg))
             v_bar = V[perm[0]]
             A[j] = lmbda*v + (1-lmbda)*v_bar
         return A
 
+
     def L_aug(self, Z, phi_A, n=100):
+        """
+        This function calculates the mutual information (MI) ratio between the representation to its' positive augmentation
+        w.r.t. the MI of the representation to its' n negative augmentations.
+        :param Z: mini-batch of embeddings (after e1+e2).
+        :param phi_A: mini-batch of augmentations' embeddings (after e2).
+        :param n: number of negative augmentations per example (must be lower than batch size).
+        :return: mean MI ratio across the mini-batch.
+        """
         vec_idx = torch.arange(Z.shape[0])
         I_Z_A = 0.0
         eps = 10.0 ** -6
@@ -959,14 +979,40 @@ class Advrtset(nn.Module):
             vec_neg = vec_idx[~np.isin(vec_idx, j)]
             perm = torch.randperm(len(vec_neg))
             v_bar = phi_A[perm[:n]]
-            # set v_bar as a mtrix with n rows and flattened data
+            # set v_bar as a matrix with n rows and flattened data
             A = torch.cat((phi_A_pos.flatten().unsqueeze(0), v_bar.view(v_bar.size(0), -1)))
             sim = torch.exp(tau*torch.matmul(A, z.flatten()))
-            L = sim[0]/(eps + torch.sum(sim))
+            L = torch.log(sim[0]/(eps + torch.sum(sim)))
             if not(torch.isnan(L)):  # can happen if tau is not enough to lower the exp in sim
                 I_Z_A -= L.item()  # NOTICE THE MINUS
         mean_I_Z_A = I_Z_A/len(Z)
         return mean_I_Z_A
+
+    def L_supp(self, Z, domain_tag):
+        """
+        This function calculates the support loss to minimize domain-specific effects.
+        :param Z: mini-batch of embeddings (after e1+e2).
+        :param domain_tag: domain labels (age, hospital number etc.).
+        :return: support loss as in the paper.
+        """
+        B_Z_D = 0.0
+        eps = 10.0 ** -6
+        tau = 10.0 ** -4
+        for j, z_domain_pair in enumerate(zip(Z, domain_tag), 0):
+          z, domain = z_domain_pair
+          Z_D = Z[domain_tag != domain]
+          # todo: should we drop z from Z?
+          if Z_D.size()[0] != 0:
+            nom = torch.sum(torch.exp(tau*torch.matmul(Z_D.flatten().unsqueeze(0), z.flatten())))
+            den = torch.sum(torch.exp(tau*torch.matmul(Z.flatten().unsqueeze(0), z.flatten())))
+            L = torch.log(nom / (den + eps))
+            if not(torch.isnan(L)):
+                B_Z_D -= L.item()
+        mean_B_Z_D = B_Z_D/len(Z)
+        return mean_B_Z_D
+
+
+
 
 
 

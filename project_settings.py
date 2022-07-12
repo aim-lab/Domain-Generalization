@@ -8,9 +8,9 @@ class ProSet:
         self.med_mode = 'a'  # control or abk ('a')
         # data paths:
         # self.train_path = '/home/smorandv/DynamicalSystems/DynamicalSystems/running_scripts/single_exp/x_y.pkl'
-        self.train_path = '/home/smorandv/ac8_and_aging/rr_data.pkl'
+        self.train_path = '/home/smorandv/ac8_and_aging_NEW/ac8_and_aging/rr_data.pkl'
         # self.test_path = '/home/smorandv/DynamicalSystems/DynamicalSystems/running_scripts/single_exp/no_exp_test.pkl'
-        self.test_path = '/home/smorandv/ac8_and_aging/rr_data.pkl'
+        self.test_path = '/home/smorandv/ac8_and_aging_NEW/ac8_and_aging/rr_data.pkl'
         # splitting:
         self.proper = True
         self.val_size = 0.2
@@ -22,8 +22,8 @@ class ProSet:
         self.phi = np.pi
         # training hyperparameters:
         self.num_epochs = 100
-        self.pretraining_epoch = 30
-        self.reg_aug = 10
+        self.pretraining_epoch = 5
+        self.reg_aug = 1
         self.lr = 0.00001
         self.batch_size = 2 ** 4
         self. weight_decay = 1  # optimizer

@@ -37,9 +37,11 @@ def load_datasets(full_pickle_path: str, med_mode: str = 'c', mode: int = 0, fea
             if train_mode:
                 x = e.x_train_specific
                 y = e.y_train_specific
+                print('Ages used in training set are {}'. format(np.unique(y['age'])))
             else:
                 x = e.x_test_specific
                 y = e.y_test_specific
+                print('Ages used in training set are {}'. format(np.unique(y['age'])))
         x_c, x_a = x[:, y['med'] == 0], x[:, y['med'] == 1]
         y_c, y_a = y['id'][y['med'] == 0].values, y['id'][y['med'] == 1].values
         if med_mode == 'c':
@@ -157,17 +159,39 @@ def train_epochs(model: object, p: object, *args):
     :param: inputs from train_model function.
     :return: prints logs of epochs.
     """
+    training_err_vector = np.zeros(p.num_epochs)
+    val_err_vector = np.zeros(p.num_epochs)
     for epoch in range(1, p.num_epochs + 1):
         epoch_time = time.time()
-        training_loss = train_batches(model, p, epoch, *args)
+        if p.calc_metric:
+            training_loss, training_err_vector[epoch - 1] = train_batches(model, p, epoch, *args)
+            validation_loss, val_err_vector[epoch - 1] = eval_model(model, p, epoch, *args)
+        else:
+            training_loss = train_batches(model, p, epoch, *args)
+            validation_loss = eval_model(model, p, epoch, *args)
         training_loss /= len(args[1])  # len of trainloader
-        validation_loss = eval_model(model, p, epoch, *args)
         if len(args) > 3:  # meaning validation exists.
             validation_loss /= len(args[3])  # len of valloader
-        log = "Epoch: {} | Training loss: {:.4f}  | Validation loss: {:.4f}   ".format(epoch, training_loss, validation_loss)
+        if p.calc_metric:
+            log = "Epoch: {} | Training loss: {:.4f}  | Validation loss: {:.4f}  |  Training ERR: {:.4f}  |" \
+                  "  Validation ERR: {:.4f}  |  ".format(epoch, training_loss, validation_loss, training_err_vector[epoch - 1],
+                                                    val_err_vector[epoch - 1])
+        else:
+            log = "Epoch: {} | Training loss: {:.4f}  | Validation loss: {:.4f}   ".format(epoch, training_loss, validation_loss)
         epoch_time = time.time() - epoch_time
         log += "Epoch Time: {:.2f} secs".format(epoch_time)
         print(log)
+    if p.calc_metric:
+        idx_val_min = np.argmin(val_err_vector)
+        print('Minimal validation ERR was {:.3f} in epoch number {}. Training ERR at the same epoch was: {:.3f}'
+              .format(np.min(val_err_vector), 1 + idx_val_min, training_err_vector[idx_val_min]))
+        plt.plot(np.arange(1, p.num_epochs + 1), training_err_vector)
+        plt.plot(np.arange(1, p.num_epochs + 1), val_err_vector)
+        plt.legend(['Train, Test'])
+        plt.ylabel('ERR')
+        plt.xlabel('epochs')
+        plt.show()
+    return
 
 
 def train_batches(model, p, epoch, *args) -> float:
@@ -198,7 +222,9 @@ def train_batches(model, p, epoch, *args) -> float:
             outputs1, aug_loss1 = model(inputs1, flag_aug=True)  # forward pass
             outputs2, aug_loss2 = model(inputs2, flag_aug=True)
             # backward + optimize
-            loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
+            loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag,
+                                                                   lmbda=p.lmbda, b=p.b)
+
         else:
             outputs1 = model(inputs1)  # forward pass
             outputs2 = model(inputs2)
@@ -213,24 +239,40 @@ def train_batches(model, p, epoch, *args) -> float:
         scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
         y_list.append(y_temp)
     if p.calc_metric:
-        calc_metric(scores_list, y_list, epoch)
+        err = calc_metric(scores_list, y_list, epoch)
+        return running_loss, err
     return running_loss
 
 
-def calc_metric(scores_list, y_list, epoch):
+def calc_metric(scores_list, y_list, epoch, train_mode='Training'):
     scores = torch.cat(scores_list)
     y = torch.cat(y_list)
     fpr, tpr, thresholds = metrics.roc_curve(y.detach().cpu(), scores.detach().cpu())
     # https://stats.stackexchange.com/questions/272962/are-far-and-frr-the-same-as-fpr-and-fnr-respectively
     far, frr, = fpr, 1 - tpr  # since frr = fnr
-    thresholds -= 1
+    # thresholds -= 1
+    tr = np.flip(thresholds)
     err_idx = np.argmin(np.abs(frr - far))
     err = 0.5 * (frr[err_idx] + far[err_idx])
+    optimal_thresh = tr[err_idx]
+    res = scores
+    res[scores >= optimal_thresh] = 1
+    res[scores < optimal_thresh] = 0
+    conf_mat = np.zeros((2, 2))
+    conf = (res == y)
+    conf_mat[0, 0] += torch.sum(1*(conf[res == 0] == 1))
+    conf_mat[0, 1] += torch.sum(1*(conf[res == 1] == 0))
+    conf_mat[1, 0] += torch.sum(1*(conf[res == 0] == 0))
+    conf_mat[1, 1] += torch.sum(1*(conf[res == 1] == 1))
+    print(conf_mat)
     if np.mod(epoch, 10) == 0:
-        plt.plot(np.flip(thresholds), far, np.flip(thresholds), frr)
+        plt.plot(tr, far, tr, frr)
         plt.legend(['FAR', 'FRR'])
-        plt.title('ERR = {:.2f}'.format(err))
+        plt.xlim((tr.min(), 1.2))
+        plt.title('{} mode: ERR = {:.2f}, epoch = {}'.format(train_mode, err, epoch))
         plt.show()
+    return err
+
 
 def eval_model(model, p, epoch, *args):
     """
@@ -278,7 +320,8 @@ def eval_batches(model, p,  epoch, *args) -> float:
                 outputs1, aug_loss1 = model(inputs1, flag_aug=True)  # forward pass
                 outputs2, aug_loss2 = model(inputs2, flag_aug=True)
                 # backward + optimize
-                loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag, lmbda=p.lmbda, b=p.b)
+                loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2,
+                                                                       flag=p.flag, lmbda=p.lmbda, b=p.b)
             else:
                 outputs1 = model(inputs1)  # forward pass
                 outputs2 = model(inputs2)
@@ -290,8 +333,8 @@ def eval_batches(model, p,  epoch, *args) -> float:
             scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
             y_list.append(y_temp)
         if p.calc_metric:
-            calc_metric(scores_list, y_list, epoch)
-
+            err = calc_metric(scores_list, y_list, epoch, train_mode='Testing')
+            return running_loss, err
     return running_loss
 
 

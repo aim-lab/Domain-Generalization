@@ -40,7 +40,7 @@ if __name__ == '__main__':
     trainloader1 = torch.utils.data.DataLoader(
         tr_dataset_1, batch_size=p.batch_size, shuffle=False, num_workers=0)
     trainloader2 = torch.utils.data.DataLoader(
-        tr_dataset_2, batch_size=p.batch_size, shuffle=False, num_workers=0)
+        tr_dataset_2, batch_size=p.batch_size, shuffle=True, num_workers=0)
     ############## VALIDATION SET ###########################
     valloader1 = torch.utils.data.DataLoader(
         val_dataset_1, batch_size=p.batch_size, shuffle=False, num_workers=0)

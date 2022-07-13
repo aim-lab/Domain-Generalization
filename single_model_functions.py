@@ -36,14 +36,19 @@ def load_datasets(full_pickle_path: str, med_mode: str = 'c', mode: int = 0, fea
             e = pickle.load(f)
             if train_mode:
                 x = e.x_train_specific
+                # x = x - x.mean(axis=0)
+                # x = x - x.min()
                 y = e.y_train_specific
                 print('Ages used in training set are {}'. format(np.unique(y['age'])))
             else:
                 x = e.x_test_specific
+                # x = x - x.mean(axis=0)
+                # x = x - x.min(axis=0)
                 y = e.y_test_specific
                 print('Ages used in training set are {}'. format(np.unique(y['age'])))
         x_c, x_a = x[:, y['med'] == 0], x[:, y['med'] == 1]
-        y_c, y_a = y[['id', 'age']][y['med'] == 0].values, y[['id', 'age']][y['med'] == 1].values
+        y_c, y_a = y[['id', 'age']][y['med'] == 0].values.astype(int), y[['id', 'age']][y['med'] == 1].values.astype(int)
+
         if med_mode == 'c':
             dataset = HRVDataset(x_c.T, y_c, mode=mode)  # transpose should fit HRVDataset
         elif med_mode == 'a':
@@ -220,10 +225,10 @@ def train_batches(model, p, epoch, *args) -> float:
         labels2 = labels2.to(p.device)
         # forward
         if epoch > p.pretraining_epoch:
-            outputs1, aug_loss1 = model(inputs1, flag_aug=True)  # forward pass
-            outputs2, aug_loss2 = model(inputs2, flag_aug=True, y=labels1[:, 1])
+            outputs1, aug_loss1, _ = model(inputs1, flag_aug=True)  # forward pass
+            outputs2, aug_loss2, supp_loss = model(inputs2, flag_aug=True, y=labels2[:, 1])
             # backward + optimize
-            loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag,
+            loss = p.reg_aug*(aug_loss1 + aug_loss2) + supp_loss + cosine_loss(outputs1, outputs2, labels1, labels2, flag=p.flag,
                                                                    lmbda=p.lmbda, b=p.b)
 
         else:
@@ -240,7 +245,8 @@ def train_batches(model, p, epoch, *args) -> float:
         scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
         y_list.append(y_temp)
     if p.calc_metric:
-        err = calc_metric(scores_list, y_list, epoch)
+        err, conf, y = calc_metric(scores_list, y_list, epoch)
+        error_analysis(dataloader1, dataloader2, conf, y)
         return running_loss, err
     return running_loss
 
@@ -277,10 +283,17 @@ def calc_metric(scores_list, y_list, epoch, train_mode='Training'):
     if np.mod(epoch, 10) == 0:
         plt.plot(tr, far, tr, frr)
         plt.legend(['FAR', 'FRR'])
-        plt.xlim((tr.min(), 1.2))
+        # plt.xlim((tr.min(), 1.2))
         plt.title('{} mode: ERR = {:.2f}, epoch = {}'.format(train_mode, err, epoch))
         plt.show()
-    return err
+    return err, conf, y
+
+def error_analysis(dataloader1, dataloader2, conf, y):
+    # wrong_pairs = (dataloader1.dataset[conf == 0], dataloader2.dataset[conf == 0])
+    # misrejected = (wrong_pairs[0][y == 1], wrong_pairs[1][y == 1])  # meaning they are the same but predicted that they are not
+    # misaccepted = (wrong_pairs[0][y == 0], wrong_pairs[1][y == 0])
+
+    pass
 
 
 def eval_model(model, p, epoch, *args):
@@ -326,10 +339,10 @@ def eval_batches(model, p,  epoch, *args) -> float:
             labels2 = labels2.to(p.device)
 
             if epoch > p.pretraining_epoch:
-                outputs1, aug_loss1 = model(inputs1, flag_aug=True)  # forward pass
-                outputs2, aug_loss2 = model(inputs2, flag_aug=True)
+                outputs1, aug_loss1, _ = model(inputs1, flag_aug=True)  # forward pass
+                outputs2, aug_loss2, supp_loss = model(inputs2, flag_aug=True, y=labels2[:, 1])
                 # backward + optimize
-                loss = p.reg_aug*(aug_loss1 + aug_loss2) + cosine_loss(outputs1, outputs2, labels1, labels2,
+                loss = p.reg_aug*(aug_loss1 + aug_loss2) + supp_loss + cosine_loss(outputs1, outputs2, labels1, labels2,
                                                                        flag=p.flag, lmbda=p.lmbda, b=p.b)
             else:
                 outputs1 = model(inputs1)  # forward pass
@@ -342,7 +355,7 @@ def eval_batches(model, p,  epoch, *args) -> float:
             scores_list.append(0.5 * (res_temp + 1))  # making the cosine similarity as probability
             y_list.append(y_temp)
         if p.calc_metric:
-            err = calc_metric(scores_list, y_list, epoch, train_mode='Testing')
+            err, conf, y = calc_metric(scores_list, y_list, epoch, train_mode='Testing')
             return running_loss, err
     return running_loss
 

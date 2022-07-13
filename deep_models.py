@@ -919,8 +919,7 @@ class Advrtset(nn.Module):
                 out = self.conv[i](out)
                 aug = self.conv[i](aug)
             aug_loss = self.L_aug(out, aug)
-            if y is not None:
-                supp_loss = self.L_supp(out, y)
+            supp_loss = self.L_supp(out, y)
 
             # collapse
             out = out.view(out.size(0), -1)
@@ -936,7 +935,7 @@ class Advrtset(nn.Module):
             # d['out'] = out
             # d['aug_loss'] = aug_loss
 
-            return out, aug_loss
+            return out, aug_loss, supp_loss
 
 
     def create_aug(self, V, alpha=0.9):
@@ -971,7 +970,7 @@ class Advrtset(nn.Module):
         vec_idx = torch.arange(Z.shape[0])
         I_Z_A = 0.0
         eps = 10.0 ** -6
-        tau = 10.0 ** -4
+        tau = 10.0 ** -4  #todo: maybe normalize inputs of exponents by inputs norm
         if n >= Z.shape[0]:
             n = Z.shape[0] - 1
         for j, pos_pair in enumerate(zip(Z, phi_A), 0):
@@ -996,18 +995,19 @@ class Advrtset(nn.Module):
         :return: support loss as in the paper.
         """
         B_Z_D = 0.0
-        eps = 10.0 ** -6
-        tau = 10.0 ** -4
-        for j, z_domain_pair in enumerate(zip(Z, domain_tag), 0):
-          z, domain = z_domain_pair
-          Z_D = Z[domain_tag != domain]
-          # todo: should we drop z from Z?
-          if Z_D.size()[0] != 0:
-            nom = torch.sum(torch.exp(tau*torch.matmul(Z_D.flatten().unsqueeze(0), z.flatten())))
-            den = torch.sum(torch.exp(tau*torch.matmul(Z.flatten().unsqueeze(0), z.flatten())))
-            L = torch.log(nom / (den + eps))
-            if not(torch.isnan(L)):
-                B_Z_D -= L.item()
+        if domain_tag is (not None or not(np.all(np.nan))):
+            eps = 10.0 ** -6
+            tau = 10.0 ** -4
+            for j, z_domain_pair in enumerate(zip(Z, domain_tag), 0):
+              z, domain = z_domain_pair
+              Z_D = Z[domain_tag != domain]
+              # todo: should we drop z from Z?
+              if Z_D.size()[0] != 0:
+                nom = torch.sum(torch.exp(tau*torch.matmul(Z_D.view(Z_D.size(0), -1), z.flatten())))
+                den = torch.sum(torch.exp(tau*torch.matmul(Z.view(Z.size(0), -1), z.flatten())))
+                L = torch.log(nom / (den + eps))
+                if not(torch.isnan(L)):
+                    B_Z_D -= L.item()
         mean_B_Z_D = B_Z_D/len(Z)
         return mean_B_Z_D
 

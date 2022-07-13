@@ -28,7 +28,7 @@ class HRVDataset(Dataset):
 
 
     def __len__(self):
-        return self.x.shape[0]  # since we the transpose
+        return self.x.shape[0]  # since we transpose
 
     def __getitem__(self, idx):
         """
@@ -54,8 +54,7 @@ class HRVDataset(Dataset):
                 idx = idx_temp
         x = self.x[idx:idx+1, :]
         y = self.y[idx, :]
-        # y = np.array(self.y[idx], dtype=np.float)
-        sample = (torch.from_numpy(x).requires_grad_(True).type(torch.FloatTensor), torch.from_numpy(y).type(torch.FloatTensor))  # just here convert to torch
+        sample = (torch.from_numpy(x).requires_grad_(True).type(torch.FloatTensor), torch.from_numpy(y).type(torch.IntTensor))  # just here convert to torch
         return sample
 
 

@@ -4,10 +4,13 @@ import numpy as np
 
 
 class CustomLoss(nn.Module):
-    def __init__(self, device, regularization_weight=0.0001):
+    def __init__(self, device, regularization_weight=0.0001, aug_weight=0.01, supp_weight=0.01):
         super(CustomLoss, self).__init__()
 
         self.regularization_weight = regularization_weight
+        self.supp_weight = supp_weight
+        self.aug_weight = aug_weight
+
         self.device = device
         self.mse = nn.MSELoss()
 
@@ -41,13 +44,13 @@ class CustomLoss(nn.Module):
             phi_aug = model.e2_model(aug_e1)
             aug_loss = self.L_aug(e2, phi_aug)
 
-            dict_losses['aug_loss'] = aug_loss
+            dict_losses['aug_loss'] = self.aug_weight * aug_loss
 
         if supp_loss_flag is True:
             assert domain_tag is not None
             supp_loss = self.L_supp(e2, domain_tag)
 
-            dict_losses['supp_loss'] = supp_loss
+            dict_losses['supp_loss'] = self.supp_weight * supp_loss
 
         return dict_losses
 
@@ -84,7 +87,7 @@ class CustomLoss(nn.Module):
         vec_idx = torch.arange(Z.shape[0])
         I_Z_A = 0.0
         eps = 10.0 ** -6
-        tau = 10.0 ** -4
+        tau = 10.0 ** -4  # todo: maybe normalize inputs of exponents by inputs norm
         if n >= Z.shape[0]:
             n = Z.shape[0] - 1
         for j, pos_pair in enumerate(zip(Z, phi_A), 0):
@@ -110,17 +113,18 @@ class CustomLoss(nn.Module):
         :return: support loss as in the paper.
         """
         B_Z_D = 0.0
-        eps = 10.0 ** -6
-        tau = 10.0 ** -4
-        for j, z_domain_pair in enumerate(zip(Z, domain_tag), 0):
-            z, domain = z_domain_pair
-            Z_D = Z[domain_tag != domain]
-            # todo: should we drop z from Z?
-            if Z_D.size()[0] != 0:
-                nom = torch.sum(torch.exp(tau * torch.matmul(Z_D.flatten().unsqueeze(0), z.flatten())))
-                den = torch.sum(torch.exp(tau * torch.matmul(Z.flatten().unsqueeze(0), z.flatten())))
-                L = torch.log(nom / (den + eps))
-                if not (torch.isnan(L)):
-                    B_Z_D -= L.item()
+        if domain_tag is (not None or not (np.all(np.nan))):
+            eps = 10.0 ** -6
+            tau = 10.0 ** -4
+            for j, z_domain_pair in enumerate(zip(Z, domain_tag), 0):
+                z, domain = z_domain_pair
+                Z_D = Z[domain_tag != domain]
+                # todo: should we drop z from Z?
+                if Z_D.size()[0] != 0:
+                    nom = torch.sum(torch.exp(tau * torch.matmul(Z_D.view(Z_D.size(0), -1), z.flatten())))
+                    den = torch.sum(torch.exp(tau * torch.matmul(Z.view(Z.size(0), -1), z.flatten())))
+                    L = torch.log(nom / (den + eps))
+                    if not (torch.isnan(L)):
+                        B_Z_D -= L.item()
         mean_B_Z_D = B_Z_D / len(Z)
         return mean_B_Z_D

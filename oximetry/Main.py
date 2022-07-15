@@ -313,5 +313,5 @@ class Main_Pytorch(Main):
 
 
 if __name__ == '__main__':
-    main_pytorch = Main_Pytorch(short_sample=False, device_ids=0, num_epochs=5, model_name='TCN')
+    main_pytorch = Main_Pytorch(short_sample=False, device_ids=0, num_epochs=200, model_name='TCN')
     main_pytorch.run()

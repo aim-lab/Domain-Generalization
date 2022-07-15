@@ -12,6 +12,18 @@ class CustomLoss(nn.Module):
         self.mse = nn.MSELoss()
 
     def forward(self, e1, e2, y_pred, y_target, model, aug_loss_flag=False, supp_loss_flag=False, domain_tag=None):
+        """
+
+        @param e1:  Encoding of the original data, with encoder e1
+        @param e2:  Encoding of the original data, with encoder e2
+        @param y_pred:  Predictions of the model
+        @param y_target:    GT
+        @param model:   The model, with e2_model as attribute (to compute phi_aug)
+        @param aug_loss_flag:   Boolean, whether to compute aug_loss
+        @param supp_loss_flag:  Boolean, whether to compute supp_loss
+        @param domain_tag:  Domain for each sample
+        @return:    Dictionary of all loss
+        """
         mse_loss = self.mse(y_pred, y_target)
 
         l2_reg = torch.tensor(0., device=self.device)

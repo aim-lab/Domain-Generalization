@@ -15,11 +15,14 @@ class _SepConv1d(nn.Module):
     def __init__(self, ni, no, kernel, stride, pad):
         super().__init__()
         self.ni = ni
-        self.depthwise = nn.Conv1d(ni, ni, kernel, stride, padding=pad, groups=ni)
-        self.pointwise = nn.Conv1d(ni, no, kernel_size=1)
+        # self.depthwise = nn.Conv1d(ni, ni, kernel, stride, padding=pad, groups=ni)
+        # self.pointwise = nn.Conv1d(ni, no, kernel_size=1)
+
+        self.depthwise = nn.Conv1d(ni, no, kernel, stride, padding=pad, groups=ni)
 
     def forward(self, x):
-        return self.pointwise(self.depthwise(x))
+        # return self.pointwise(self.depthwise(x))
+        return self.depthwise(x)
 
 
 class SepConv1d(nn.Module):

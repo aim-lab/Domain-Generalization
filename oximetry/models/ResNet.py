@@ -4,6 +4,8 @@ from torch import nn
 import torch.nn.functional as F
 from icecream import ic
 
+from DL.pytorch_version.models.DSU import DistributionUncertainty
+
 
 class MyConv1dPadSame(nn.Module):
     """
@@ -72,7 +74,7 @@ class BasicBlock(nn.Module):
     ResNet Basic Block
     """
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride, groups, downsample, use_bn, use_do,
+    def __init__(self, in_channels, out_channels, kernel_size, stride, groups, downsample, use_bn, use_do, dropout,
                  is_first_block=False):
         super(BasicBlock, self).__init__()
 
@@ -94,7 +96,7 @@ class BasicBlock(nn.Module):
         # the first conv
         self.bn1 = nn.BatchNorm1d(in_channels)
         self.relu1 = self.acti()
-        self.do1 = nn.Dropout(p=0.5)
+        self.do1 = nn.Dropout(p=dropout)
         self.conv1 = MyConv1dPadSame(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -105,7 +107,7 @@ class BasicBlock(nn.Module):
         # the second conv
         self.bn2 = nn.BatchNorm1d(out_channels)
         self.relu2 = self.acti()
-        self.do2 = nn.Dropout(p=0.5)
+        self.do2 = nn.Dropout(p=dropout)
         self.conv2 = MyConv1dPadSame(
             in_channels=out_channels,
             out_channels=out_channels,
@@ -175,8 +177,8 @@ class ResNet1D(nn.Module):
 
     """
 
-    def __init__(self, in_channels, base_filters, kernel_size, stride, groups, n_block, downsample_gap=2,
-                 increasefilter_gap=4, use_bn=True, use_do=True, verbose=False):
+    def __init__(self, in_channels, base_filters, kernel_size, stride, groups, n_block, dropout, downsample_gap=2,
+                 increasefilter_gap=4, use_bn=True, use_do=True, verbose=False, configuration_run=None):
         super(ResNet1D, self).__init__()
 
         self.acti = nn.LeakyReLU
@@ -191,15 +193,12 @@ class ResNet1D(nn.Module):
         self.downsample_gap = downsample_gap  # 2 for base model
         self.increasefilter_gap = increasefilter_gap  # 4 for base model
 
-        # first block
-        self.first_block_conv = MyConv1dPadSame(in_channels=in_channels, out_channels=base_filters,
-                                                kernel_size=self.kernel_size, stride=1)
-        self.first_block_bn = nn.BatchNorm1d(base_filters)
-        self.first_block_relu = self.acti()
         out_channels = base_filters
 
-        # residual blocks
-        self.basicblock_list = nn.ModuleList()
+        e1_module = [MyConv1dPadSame(in_channels=in_channels, out_channels=base_filters,
+                                     kernel_size=self.kernel_size, stride=1), nn.BatchNorm1d(base_filters), self.acti()]
+        e2_module = []
+
         for i_block in range(self.n_block):
             # is_first_block
             if i_block == 0:
@@ -232,33 +231,33 @@ class ResNet1D(nn.Module):
                 downsample=downsample,
                 use_bn=self.use_bn,
                 use_do=self.use_do,
-                is_first_block=is_first_block)
-            self.basicblock_list.append(tmp_block)
+                is_first_block=is_first_block,
+                dropout=dropout)
 
-        # final prediction
-        self.final_bn = nn.BatchNorm1d(out_channels)
-        self.final_relu = self.acti()
-        self.dense = nn.Linear(out_channels, 1)
+            if i_block < self.n_block/2:
+                e1_module.append(tmp_block)
+            else:
+                e2_module.append(tmp_block)
+
+        if configuration_run == 'DSU':
+            e1_module += [DistributionUncertainty()]
+            e2_module += [DistributionUncertainty()]
+
+        self.e1_model = nn.Sequential(*e1_module)
+        self.e2_model = nn.Sequential(*e2_module)
+
+        classifier_layers = [nn.AdaptiveAvgPool1d(output_size=1), nn.Flatten(), nn.BatchNorm1d(out_channels),
+                             self.acti(), nn.Linear(out_channels, 1)]
+
+        self.classifier = nn.Sequential(*classifier_layers)
 
     def forward(self, x):
-        out = torch.unsqueeze(x, 1)
+        x = torch.unsqueeze(x, 1)
 
-        # first conv
-        out = self.first_block_conv(out)
+        e1 = self.e1_model(x)
+        e2 = self.e2_model(e1)
 
-        if self.use_bn:
-            out = self.first_block_bn(out)
-        out = self.first_block_relu(out)
-
-        # residual blocks, every block has two conv
-        for i_block in range(self.n_block):
-            net = self.basicblock_list[i_block]
-            out = net(out)
-
-        if self.use_bn:
-            out = self.final_bn(out)
-        out = self.final_relu(out)
-        out = out.mean(-1)
-        out = self.dense(out)
+        out = self.classifier(e2)
         out = torch.squeeze(out)
-        return out
+
+        return e1, e2, out

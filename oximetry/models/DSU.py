@@ -26,8 +26,8 @@ class DistributionUncertainty(nn.Module):
         return t
 
     def forward(self, x):
-        # if (not self.training) or (np.random.random()) > self.p:
-        #     return x
+        if (not self.training) or (np.random.random()) > self.p:
+            return x
 
         mean = x.mean(dim=[2], keepdim=False)
         std = (x.var(dim=[2], keepdim=False) + self.eps).sqrt()

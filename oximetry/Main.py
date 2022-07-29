@@ -25,6 +25,7 @@ from utils.help_classes import WrongParameter, Databases_osa
 from DL.Dataloader.DataGeneratorFullSignal import merge_generator
 from DL.pytorch_version.Custom_Loss import CustomLoss
 from DL.pytorch_version.SettingsDL import GetDict
+from DL.pytorch_version.warmup import UntunedLinearWarmup
 
 
 def sample_from_dict(dict_params_it):
@@ -83,7 +84,6 @@ class Main_Pytorch(Main):
                                      aug_weight=self.params_it['aug_weight'],
                                      supp_weight=self.params_it['supp_weight'])
         self.sample_class = GetDict(self.model_name)
-        self.writer = None
 
     def plot_output_model(self, y_pred, y_test, epoch):
         y_pred = torch.cat(y_pred, 0).detach().numpy().flatten()
@@ -120,7 +120,8 @@ class Main_Pytorch(Main):
                               savefig=True, main_title='grads_model_' + str(epoch),
                               legend_fontsize=self.fontsize)
 
-    def run_epoch(self, data_loader, optimizer, model, train_flag, epoch_number, configuration_run=None):
+    def run_epoch(self, data_loader, optimizer, lr_scheduler, model, train_flag, epoch_number,
+                  configuration_run=None):
         if train_flag is True:
             add_str = 'Train'
             model.train()
@@ -130,16 +131,16 @@ class Main_Pytorch(Main):
 
         if configuration_run == 'aug_loss':
             aug_loss_flag = True
-        else:
+            sup_loss_flag = False
+        elif configuration_run == 'sup_loss':
             aug_loss_flag = False
-
-        if configuration_run == 'sup_loss':
             sup_loss_flag = True
         else:
+            aug_loss_flag = False
             sup_loss_flag = False
 
-        dict_epoch_loss = {}
-        for data in tqdm(data_loader):
+        self.loss_class.on_epoch_begin()
+        for i, data in enumerate(tqdm(data_loader)):
             if train_flag is True:
                 optimizer.zero_grad()
 
@@ -149,29 +150,18 @@ class Main_Pytorch(Main):
             dataset_label = dataset_label.to(self.device)
 
             e1, e2, out = model(signal)
-            dict_loss = self.loss_class(e1=e1, e2=e2, y_pred=out, y_target=label, model=model,
-                                        aug_loss_flag=aug_loss_flag, sup_loss_flag=sup_loss_flag,
-                                        domain_tag=dataset_label)
+            self.loss_class(e1=e1, e2=e2, y_pred=out, y_target=label, model=model, aug_loss_flag=aug_loss_flag,
+                            sup_loss_flag=sup_loss_flag, domain_tag=dataset_label, train_flag=train_flag)
 
-            if train_flag is True:
-                for key_loss in dict_loss:
-                    try:
-                        dict_loss[key_loss].backward(retain_graph=True)
-                    except RuntimeError:
-                        continue
-                optimizer.step()
+            # if train_flag is True:
+            #     optimizer.step()
 
-            for key_loss in dict_loss:
-                if key_loss in dict_epoch_loss.keys():
-                    dict_epoch_loss[key_loss] += dict_loss[key_loss].data.item()
-                else:
-                    dict_epoch_loss[key_loss] = dict_loss[key_loss].data.item()
+        self.loss_class.on_epoch_end(len(data_loader), add_str, epoch_number)
 
-        for key_loss in dict_epoch_loss:
-            dict_epoch_loss[key_loss] /= len(data_loader)
-            self.writer.add_scalar(key_loss + "/" + add_str, dict_epoch_loss[key_loss], epoch_number)
+        lr_scheduler.step()
+        self.loss_class.writer.add_scalar('learning_rate' + "/" + add_str, lr_scheduler.get_last_lr()[0], epoch_number)
 
-        running_loss = dict_epoch_loss['mse_loss']
+        running_loss = self.loss_class.get_running_loss()
         log = add_str + " Loss: {:.4f}  | ".format(running_loss)
 
         return running_loss, log
@@ -238,7 +228,7 @@ class Main_Pytorch(Main):
             pass
 
     def prepare_data(self, curr_params, configuration_run):
-        if configuration_run == 'sup_loss':
+        if (configuration_run == 'sup_loss') or (configuration_run == 'regular_all'):
             compute_external = True
             self.skip_wsc = True
         else:
@@ -329,20 +319,21 @@ class Main_Pytorch(Main):
             model = nn.DataParallel(model, device_ids=list(range(torch.cuda.device_count())))
         return model
 
-    def train_model(self, train_dataloader, val_dataloader, optimizer, model, i, configuration_run=None):
+    def train_model(self, train_dataloader, val_dataloader, optimizer, lr_scheduler, model, i,
+                    configuration_run=None):
         best_val_loss = np.inf
         for epoch in range(1, self.num_epochs + 1):
             epoch_time = time.time()
 
             try:
-                _, train_log = self.run_epoch(train_dataloader, optimizer, model, train_flag=True,
-                                              epoch_number=epoch, configuration_run=configuration_run)
+                _, train_log = self.run_epoch(train_dataloader, optimizer, lr_scheduler, model,
+                                              train_flag=True, epoch_number=epoch, configuration_run=configuration_run)
             except KeyboardInterrupt:
                 break
 
             with torch.no_grad():
-                val_loss, val_log = self.run_epoch(val_dataloader, optimizer, model, train_flag=False,
-                                                   epoch_number=epoch)
+                val_loss, val_log = self.run_epoch(val_dataloader, optimizer, lr_scheduler, model,
+                                                   train_flag=False, epoch_number=epoch)
 
             best_val_loss, stop_training = self.save_model(best_val_loss, val_loss, model, epoch, i)
 
@@ -372,8 +363,10 @@ class Main_Pytorch(Main):
             train_dataloader, val_dataloader = self.prepare_data(curr_params, configuration_run=None)
             model = self.get_model(curr_params)
             optimizer = torch.optim.Adam(model.parameters(), lr=curr_params['learning_rate'])
+            lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 30, 40, 50], gamma=0.1)
 
-            best_val_loss = self.train_model(train_dataloader, val_dataloader, optimizer, model, i)
+            best_val_loss = self.train_model(train_dataloader, val_dataloader, optimizer,
+                                             lr_scheduler, model, i)
 
             dict_results = self.inference(curr_params, model_idx=i, val_dataloader=val_dataloader)
             dict_final = {**curr_params, **dict_results, 'val_loss': best_val_loss, 'seed': seed_array[i]}
@@ -410,7 +403,7 @@ class Main_Pytorch(Main):
 
         return dict_return
 
-    def generalization_run(self, filename, configuration_run):
+    def generalization_run(self, filename, configuration_run, log_dir):
         dict_run = self.sample_class.retrieve_dict_run(filename)
         print(dict_run)
 
@@ -422,13 +415,16 @@ class Main_Pytorch(Main):
         if configuration_run == 'aug_loss':
             model.load_state_dict(torch.load(os.path.join(self.saved_path, 'model_regular_34_315.pth')))
         elif configuration_run == 'sup_loss':
+            print('loading pre-trained model')
             model.load_state_dict(torch.load(os.path.join(self.saved_path, 'model_regular_34_315.pth')))
 
         optimizer = torch.optim.Adam(model.parameters(), lr=dict_run['learning_rate'])
-        self.writer = SummaryWriter(log_dir='run_generalization')
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=25, gamma=0.3)
 
-        best_val_loss = self.train_model(train_dataloader, val_dataloader, optimizer, model, i=100,
-                                         configuration_run=configuration_run)
+        self.loss_class.set_writer(log_dir=log_dir)
+
+        best_val_loss = self.train_model(train_dataloader, val_dataloader, optimizer, lr_scheduler,
+                                         model, i=100, configuration_run=configuration_run)
         dict_run['val_loss'] = best_val_loss
 
         external_data = self.prepare_external_data(curr_params=dict_run, add_wsc=False)
@@ -436,7 +432,7 @@ class Main_Pytorch(Main):
             dict_res = self.inference(dict_run, model_idx=100, val_dataloader=val_data, model=model, add_str=name_data)
             dict_run = {**dict_run, **dict_res}
 
-        self.writer.close()
+        self.loss_class.writer.close()
         save_dict(dict_run, file_name=os.path.join(self.saved_path, 'generalization_run_' + configuration_run + '.csv'))
 
 
@@ -446,6 +442,6 @@ if __name__ == '__main__':
 
     # main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='regular')
     # main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='aug_loss')
-    # main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='sup_loss')
+    main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='sup_loss', log_dir='sup_loss')
     # main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='DSU')
-    main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='regular_all')
+    # main_pytorch.generalization_run(filename='config_resnet.csv', configuration_run='regular_all', log_dir='scheduling')

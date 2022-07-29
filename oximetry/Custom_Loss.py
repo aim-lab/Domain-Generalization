@@ -1,6 +1,7 @@
 from torch import nn
 import torch
 import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 
 class CustomLoss(nn.Module):
@@ -14,7 +15,11 @@ class CustomLoss(nn.Module):
         self.device = device
         self.regression_loss = nn.L1Loss()
 
-    def forward(self, e1, e2, y_pred, y_target, model, aug_loss_flag=False, sup_loss_flag=False, domain_tag=None):
+        self.dict_epoch_loss = {}
+        self.writer = None
+
+    def forward(self, e1, e2, y_pred, y_target, model, train_flag, aug_loss_flag=False, sup_loss_flag=False,
+                domain_tag=None):
         """
 
         @param e1:  Encoding of the original data, with encoder e1
@@ -28,15 +33,18 @@ class CustomLoss(nn.Module):
         @return:    Dictionary of all loss
         """
         mse_loss = self.regression_loss(y_pred, y_target)
+        loss = mse_loss
 
         l2_reg = torch.tensor(0., device=self.device)
         for param in model.parameters():
             l2_reg += torch.norm(param)
-        reg_loss = self.regularization_weight * l2_reg
 
-        dict_losses = {
+        reg_loss = self.regularization_weight * l2_reg
+        loss += reg_loss
+
+        dict_loss = {
             'mse_loss': mse_loss,
-            'reg_loss': reg_loss,
+            'reg_loss': reg_loss
         }
 
         if aug_loss_flag is True:
@@ -44,15 +52,23 @@ class CustomLoss(nn.Module):
             phi_aug = model.e2_model(aug_e1)
             aug_loss = self.L_aug(e2, phi_aug)
 
-            dict_losses['aug_loss'] = self.aug_weight * aug_loss
+            aug_loss_value = self.aug_weight * aug_loss
+            loss += aug_loss_value
+            dict_loss['aug_loss'] = aug_loss_value
 
         if sup_loss_flag is True:
             assert domain_tag is not None
             supp_loss = self.L_supp(e2, domain_tag)
 
-            dict_losses['supp_loss'] = self.supp_weight * supp_loss
+            supp_loss_value = self.supp_weight * supp_loss
+            loss += supp_loss_value
+            dict_loss['supp_loss'] = supp_loss_value
 
-        return dict_losses
+        if train_flag is True:
+            loss.backward(retain_graph=True)
+
+        self.update_dict_loss(dict_loss)
+        return loss
 
     @staticmethod
     def create_aug(V, alpha=0.9):
@@ -75,7 +91,7 @@ class CustomLoss(nn.Module):
         return A
 
     @staticmethod
-    def L_aug(Z, phi_A, n=100, eps=10.0 ** -6, tau=10.0 ** -10):
+    def L_aug(Z, phi_A, n=100, eps=10.0 ** -6, tau=10.0 ** -6):
         """
         This function calculates the mutual information (MI) ratio between the representation to its' positive augmentation
         w.r.t. the MI of the representation to its' n negative augmentations.
@@ -133,4 +149,25 @@ class CustomLoss(nn.Module):
                     B_Z_D -= L
 
         mean_B_Z_D = B_Z_D / len(Z)
-        return mean_B_Z_D
+        return mean_B_Z_D[0]
+
+    def on_epoch_begin(self):
+        self.dict_epoch_loss = {}
+
+    def update_dict_loss(self, dict_loss):
+        for key_loss in dict_loss:
+            if key_loss in self.dict_epoch_loss.keys():
+                self.dict_epoch_loss[key_loss] += dict_loss[key_loss].data.item()
+            else:
+                self.dict_epoch_loss[key_loss] = dict_loss[key_loss].data.item()
+
+    def on_epoch_end(self, len_dataloader, add_str, epoch_number):
+        for key_loss in self.dict_epoch_loss:
+            self.dict_epoch_loss[key_loss] /= len_dataloader
+            self.writer.add_scalar(key_loss + "/" + add_str, self.dict_epoch_loss[key_loss], epoch_number)
+
+    def get_running_loss(self):
+        return self.dict_epoch_loss['mse_loss']
+
+    def set_writer(self, log_dir):
+        self.writer = SummaryWriter(log_dir=log_dir)
